@@ -1,0 +1,22 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Build with the latest stable Go (not just the go.mod minimum) so each
+      # release picks up standard library security fixes.
+      # Artifact attestations (generate_attestations) need a public repo or
+      # GitHub Enterprise Cloud; enable them if the repo goes public.
+      - uses: cli/gh-extension-precompile@v2
+        with:
+          go_version: stable

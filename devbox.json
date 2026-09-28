@@ -1,0 +1,15 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": ["go@latest"],
+  "shell": {
+    "init_hook": ["echo 'Welcome to devbox!' > /dev/null"],
+    "scripts": {
+      "build": ["go build -o gh-team-reviews ."],
+      "test": ["go vet ./...", "go test ./..."],
+      "install": [
+        "go build -o gh-team-reviews .",
+        "gh extension list | grep -q 'gh team-reviews' || gh extension install ."
+      ]
+    }
+  }
+}

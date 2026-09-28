@@ -1,0 +1,20 @@
+version: 2
+
+# Updates are grouped into one PR per ecosystem per month. Security updates
+# are opened as soon as an advisory is published, regardless of schedule.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
