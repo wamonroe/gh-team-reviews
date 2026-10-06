@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/wamonroe/gh-team-reviews/internal/github"
 )
@@ -73,10 +74,74 @@ func TestNeedsReview(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "viewer already reviewed",
+			name: "team requested, viewer only commented",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[{"requestedReviewer":{"combinedSlug":"acme/payments"}}]}}`,
+			want: true,
+		},
+		{
+			name: "team requested, viewer approved or requested changes",
 			json: `{"author":{"login":"dave"},
 				"timelineItems":{"nodes":[{"requestedReviewer":{"combinedSlug":"acme/payments"}}]},
-				"viewerReviews":{"totalCount":1}}`,
+				"viewerDecisions":{"nodes":[{"submittedAt":"2026-01-02T00:00:00Z"}]}}`,
+			want: false,
+		},
+		{
+			name: "team request removed",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}},
+					{"__typename":"ReviewRequestRemovedEvent","createdAt":"2026-01-02T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}}]}}`,
+			want: false,
+		},
+		{
+			name: "team re-requested after removal",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}},
+					{"__typename":"ReviewRequestRemovedEvent","createdAt":"2026-01-02T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}},
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-03T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}}]}}`,
+			want: true,
+		},
+		{
+			name: "removing the viewer doesn't hide a team request",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}},
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"login":"me"}},
+					{"__typename":"ReviewRequestRemovedEvent","createdAt":"2026-01-02T00:00:00Z","requestedReviewer":{"login":"me"}}]}}`,
+			want: true,
+		},
+		{
+			name: "direct request cleared by viewer's comment",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"login":"me"}}]}}`,
+			want: true,
+		},
+		{
+			name: "direct request cleared by viewer's approval",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"login":"me"}}]},
+				"viewerDecisions":{"nodes":[{"submittedAt":"2026-01-02T00:00:00Z"}]}}`,
+			want: false,
+		},
+		{
+			name: "re-requested after viewer approved, then viewer commented",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"login":"me"}},
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-03T00:00:00Z","requestedReviewer":{"login":"me"}}]},
+				"viewerDecisions":{"nodes":[{"submittedAt":"2026-01-02T00:00:00Z"}]}}`,
+			want: true,
+		},
+		{
+			name: "direct request removed",
+			json: `{"author":{"login":"dave"},
+				"timelineItems":{"nodes":[
+					{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"login":"me"}},
+					{"__typename":"ReviewRequestRemovedEvent","createdAt":"2026-01-02T00:00:00Z","requestedReviewer":{"login":"me"}}]}}`,
 			want: false,
 		},
 		{
@@ -93,7 +158,7 @@ func TestNeedsReview(t *testing.T) {
 				"latestOpinionatedReviews":{"nodes":[
 					{"state":"APPROVED","author":{"login":"alice"}},
 					{"state":"APPROVED","author":{"login":"bob"}}]},
-				"viewerReviews":{"totalCount":1}}`,
+				"viewerDecisions":{"nodes":[{"submittedAt":"2026-01-02T00:00:00Z"}]}}`,
 			want: true,
 		},
 		{
@@ -176,5 +241,68 @@ func TestDirectEntryWaitsOnViewerOnly(t *testing.T) {
 	}
 	if got := e.RequiredApprovals(); got != 1 {
 		t.Errorf("RequiredApprovals() = %d, want 1", got)
+	}
+}
+
+func TestDismissed(t *testing.T) {
+	dismissedAt := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name        string
+		json        string
+		dismissedAt time.Time
+		want        bool
+	}{
+		{
+			name: "not dismissed",
+			json: `{"reviewRequests":{"nodes":[{"requestedReviewer":{"combinedSlug":"acme/payments"}}]}}`,
+			want: false,
+		},
+		{
+			name: "dismissed after the team was requested",
+			json: `{"timelineItems":{"nodes":[
+				{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}}]}}`,
+			dismissedAt: dismissedAt,
+			want:        true,
+		},
+		{
+			name: "team re-requested since",
+			json: `{"timelineItems":{"nodes":[
+				{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}},
+				{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-03T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}}]}}`,
+			dismissedAt: dismissedAt,
+			want:        false,
+		},
+		{
+			name: "viewer requested since",
+			json: `{"reviewRequests":{"nodes":[{"requestedReviewer":{"login":"me"}}]},
+				"timelineItems":{"nodes":[
+				{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-03T00:00:00Z","requestedReviewer":{"login":"me"}}]}}`,
+			dismissedAt: dismissedAt,
+			want:        false,
+		},
+		{
+			name: "someone else requested since",
+			json: `{"timelineItems":{"nodes":[
+				{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-01T00:00:00Z","requestedReviewer":{"combinedSlug":"acme/payments"}},
+				{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-03T00:00:00Z","requestedReviewer":{"login":"alice"}}]}}`,
+			dismissedAt: dismissedAt,
+			want:        true,
+		},
+		{
+			name:        "pending team request from before the fetched timeline",
+			json:        `{"reviewRequests":{"nodes":[{"requestedReviewer":{"combinedSlug":"acme/payments"}}]}}`,
+			dismissedAt: dismissedAt,
+			want:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := entry(pr(t, tt.json))
+			e.DismissedAt = tt.dismissedAt
+			if got := e.Dismissed(); got != tt.want {
+				t.Errorf("Dismissed() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

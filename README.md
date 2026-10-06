@@ -51,6 +51,7 @@ gh team-reviews --team my-org/my-team   # track a different team
 gh team-reviews --required 3            # need three team approvals
 gh team-reviews --team=""               # ignore the configured team
 gh team-reviews --json                  # machine-readable output
+gh team-reviews --all                   # include PRs you've dismissed
 ```
 
 Without a team, only PRs where you are directly requested are listed.
@@ -61,8 +62,34 @@ A PR is listed when it's open, not a draft, not yours, and either:
 
 - **you** are directly requested as a reviewer, or
 - your **team** was requested (now, or at any point — GitHub removes the team
-  request once someone reviews), fewer than `required` team members have
-  approved it, and you haven't reviewed it yet.
+  request once someone reviews) and fewer than `required` team members have
+  approved it.
+
+Either way, the PR stays listed until you approve it or request changes.
+Leaving only comments (to ask a question before you review, say) doesn't take
+it off your list, even though GitHub clears your review request when you do.
+If the author re-requests your review after you've approved, it comes back.
+
+## Dismissing PRs
+
+When a PR is still on your list but you don't need to review it (say, your
+team's files were dropped from it), dismiss it:
+
+```sh
+gh team-reviews dismiss https://github.com/acme/storefront/pull/412
+gh team-reviews dismiss acme/storefront#412 acme/billing-api#88
+gh team-reviews undismiss acme/storefront#412
+```
+
+A dismissed PR stays hidden until you or your team are requested to review it
+again. New commits or comments don't bring it back. `--all` lists dismissed PRs
+too, with a DISMISSED column showing how long ago you dismissed each one.
+
+Dismissals are only stored on your machine, in `dismissed.yml` next to the
+config file, so nobody else sees them. Dismissing also clears out entries for
+PRs that have since closed or merged.
+
+## Reading the list
 
 The REVIEWS column shows approvals against what the PR is waiting on:
 
@@ -80,6 +107,7 @@ This project uses [devbox](https://www.jetify.com/devbox) and
 
 ```sh
 direnv allow
+devbox run build     # build ./gh-team-reviews
 devbox run test      # go vet + go test
 devbox run install   # build and install as a local gh extension
 ```

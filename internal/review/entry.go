@@ -2,6 +2,7 @@ package review
 
 import (
 	"slices"
+	"time"
 
 	"github.com/wamonroe/gh-team-reviews/internal/github"
 )
@@ -14,13 +15,19 @@ type Entry struct {
 	Team     string // "org/slug", or empty when only tracking direct requests
 	Members  []string
 	Required int
+	// DismissedAt is when the viewer dismissed the PR, or zero if they
+	// haven't.
+	DismissedAt time.Time
 }
 
 // NeedsReview reports whether the PR belongs in the viewer's queue:
 //
 //   - the viewer is directly requested, or
 //   - the team was requested (now or at any point), fewer than Required team
-//     members have approved, and the viewer hasn't reviewed it yet.
+//     members have approved, and the viewer hasn't approved or requested
+//     changes.
+//
+// Comment-only reviews never take a PR off the queue.
 func (e Entry) NeedsReview() bool {
 	if e.PR.IsDraft || e.PR.AuthorLogin() == e.Viewer {
 		return false
@@ -28,15 +35,48 @@ func (e Entry) NeedsReview() bool {
 	if e.DirectlyRequested() {
 		return true
 	}
-	return e.TeamRequested() && !e.PR.ReviewedByViewer() && len(e.teamApprovals()) < e.Required
+	_, decided := e.PR.ViewerDecidedAt()
+	return e.TeamRequested() && !decided && len(e.teamApprovals()) < e.Required
 }
 
+// DirectlyRequested reports whether the viewer has a pending review request,
+// or had one that their comment-only reviews cleared: they haven't approved
+// or requested changes since they were last asked.
 func (e Entry) DirectlyRequested() bool {
-	return slices.Contains(e.PR.PendingUsers(), e.Viewer)
+	if slices.Contains(e.PR.PendingUsers(), e.Viewer) {
+		return true
+	}
+	requestedAt, requested := e.PR.UserRequestedAt(e.Viewer)
+	if !requested {
+		return false
+	}
+	decidedAt, decided := e.PR.ViewerDecidedAt()
+	return !decided || decidedAt.Before(requestedAt)
 }
 
 func (e Entry) TeamRequested() bool {
-	return e.Team != "" && slices.Contains(e.PR.RequestedTeams(), e.Team)
+	if e.Team == "" {
+		return false
+	}
+	_, requested := e.PR.TeamRequestedAt(e.Team)
+	return requested
+}
+
+// Dismissed reports whether the viewer dismissed the PR and neither they nor
+// the team have been asked to review since.
+func (e Entry) Dismissed() bool {
+	if e.DismissedAt.IsZero() {
+		return false
+	}
+	if at, ok := e.PR.UserRequestedAt(e.Viewer); ok && at.After(e.DismissedAt) {
+		return false
+	}
+	if e.Team != "" {
+		if at, ok := e.PR.TeamRequestedAt(e.Team); ok && at.After(e.DismissedAt) {
+			return false
+		}
+	}
+	return true
 }
 
 // RequiredApprovals is how many approvals this entry is waiting on. A direct
