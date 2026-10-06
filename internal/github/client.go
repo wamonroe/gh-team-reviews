@@ -2,7 +2,9 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -24,13 +26,25 @@ query($q: String!, $viewer: String!, $cursor: String) {
         reviewRequests(first: 50) {
           nodes { requestedReviewer { ... on User { login } ... on Team { combinedSlug } } }
         }
-        timelineItems(first: 100, itemTypes: [REVIEW_REQUESTED_EVENT]) {
-          nodes { ... on ReviewRequestedEvent { requestedReviewer { ... on Team { combinedSlug } } } }
+        timelineItems(last: 100, itemTypes: [REVIEW_REQUESTED_EVENT, REVIEW_REQUEST_REMOVED_EVENT]) {
+          nodes {
+            __typename
+            ... on ReviewRequestedEvent {
+              createdAt
+              requestedReviewer { ... on User { login } ... on Team { combinedSlug } }
+            }
+            ... on ReviewRequestRemovedEvent {
+              createdAt
+              requestedReviewer { ... on User { login } ... on Team { combinedSlug } }
+            }
+          }
         }
         latestOpinionatedReviews(first: 50) {
           nodes { state author { login } }
         }
-        viewerReviews: reviews(first: 1, author: $viewer) { totalCount }
+        viewerDecisions: reviews(last: 1, author: $viewer, states: [APPROVED, CHANGES_REQUESTED]) {
+          nodes { submittedAt }
+        }
       }
     }
   }
@@ -111,6 +125,53 @@ func (c *Client) TeamMembers(ctx context.Context, team string) ([]string, error)
 		}
 		cursor = &members.PageInfo.EndCursor
 	}
+}
+
+// PullRequestStates returns the state (OPEN, CLOSED, or MERGED) of each
+// pull request in refs, or "" for any that don't exist or you can't see.
+func (c *Client) PullRequestStates(ctx context.Context, refs []Ref) ([]string, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+
+	var params, fields []string
+	vars := map[string]interface{}{}
+	for i, ref := range refs {
+		owner, name, _ := strings.Cut(ref.Repo, "/")
+		params = append(params, fmt.Sprintf("$owner%d: String!, $name%d: String!, $number%d: Int!", i, i, i))
+		fields = append(fields, fmt.Sprintf(
+			"pr%d: repository(owner: $owner%d, name: $name%d) { pullRequest(number: $number%d) { state } }", i, i, i, i))
+		vars[fmt.Sprintf("owner%d", i)] = owner
+		vars[fmt.Sprintf("name%d", i)] = name
+		vars[fmt.Sprintf("number%d", i)] = ref.Number
+	}
+	query := fmt.Sprintf("query(%s) {\n%s\n}", strings.Join(params, ", "), strings.Join(fields, "\n"))
+
+	var resp map[string]*struct {
+		PullRequest *struct {
+			State string `json:"state"`
+		} `json:"pullRequest"`
+	}
+	// Missing repos and PRs come back as NOT_FOUND errors alongside the data
+	// for the rest.
+	err := c.gql.DoWithContext(ctx, query, vars, &resp)
+	var gqlErr *api.GraphQLError
+	if errors.As(err, &gqlErr) && !slices.ContainsFunc(gqlErr.Errors, func(e api.GraphQLErrorItem) bool {
+		return e.Type != "NOT_FOUND"
+	}) {
+		err = nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("looking up pull requests: %w", err)
+	}
+
+	states := make([]string, len(refs))
+	for i := range refs {
+		if repo := resp[fmt.Sprintf("pr%d", i)]; repo != nil && repo.PullRequest != nil {
+			states[i] = repo.PullRequest.State
+		}
+	}
+	return states, nil
 }
 
 // SearchPullRequests runs an advanced (boolean-capable) search and returns

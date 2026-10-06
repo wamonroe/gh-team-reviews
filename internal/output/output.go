@@ -14,15 +14,16 @@ import (
 )
 
 type jsonEntry struct {
-	URL       string    `json:"url"`
-	Repo      string    `json:"repo"`
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	Author    string    `json:"author"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Reason    string    `json:"reason"`
-	Approvals []string  `json:"approvals"`
-	Required  int       `json:"required"`
+	URL         string     `json:"url"`
+	Repo        string     `json:"repo"`
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	Author      string     `json:"author"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	Reason      string     `json:"reason"`
+	Approvals   []string   `json:"approvals"`
+	Required    int        `json:"required"`
+	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
 }
 
 func JSON(w io.Writer, entries []review.Entry) error {
@@ -39,6 +40,9 @@ func JSON(w io.Writer, entries []review.Entry) error {
 			Approvals: e.Approvals(),
 			Required:  e.RequiredApprovals(),
 		}
+		if e.Dismissed() {
+			out[i].DismissedAt = &e.DismissedAt
+		}
 	}
 
 	enc := json.NewEncoder(w)
@@ -48,8 +52,9 @@ func JSON(w io.Writer, entries []review.Entry) error {
 
 // Table prints entries as a table on a terminal, or as tab-separated values
 // without a header when piped. The REVIEWS and FOR columns only appear when a
-// team is being tracked.
-func Table(t term.Term, entries []review.Entry, team string, now time.Time) error {
+// team is being tracked, and DISMISSED (how long ago, blank if not dismissed)
+// only with showDismissed.
+func Table(t term.Term, entries []review.Entry, team string, showDismissed bool, now time.Time) error {
 	isTTY := t.IsTerminalOutput()
 	if len(entries) == 0 {
 		if isTTY {
@@ -65,11 +70,15 @@ func Table(t term.Term, entries []review.Entry, team string, now time.Time) erro
 	org, _, _ := strings.Cut(team, "/")
 
 	tp := tableprinter.New(t.Out(), isTTY, width)
+	header := []string{"PR"}
 	if team != "" {
-		tp.AddHeader([]string{"PR", "REVIEWS", "FOR", "UPDATED", "AUTHOR", "TITLE"})
-	} else {
-		tp.AddHeader([]string{"PR", "UPDATED", "AUTHOR", "TITLE"})
+		header = append(header, "REVIEWS", "FOR")
 	}
+	header = append(header, "UPDATED")
+	if showDismissed {
+		header = append(header, "DISMISSED")
+	}
+	tp.AddHeader(append(header, "AUTHOR", "TITLE"))
 
 	for _, e := range entries {
 		label := e.PR.Repo()
@@ -84,6 +93,13 @@ func Table(t term.Term, entries []review.Entry, team string, now time.Time) erro
 			tp.AddField(e.Reason(), tableprinter.WithTruncate(nil))
 		}
 		tp.AddField(age(now.Sub(e.PR.UpdatedAt)), tableprinter.WithTruncate(nil))
+		if showDismissed {
+			dismissed := ""
+			if e.Dismissed() {
+				dismissed = age(now.Sub(e.DismissedAt))
+			}
+			tp.AddField(dismissed, tableprinter.WithTruncate(nil))
+		}
 		tp.AddField(e.PR.AuthorLogin(), tableprinter.WithTruncate(nil))
 		tp.AddField(e.PR.Title)
 		tp.EndRow()

@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/wamonroe/gh-team-reviews/internal/dismissed"
 	"github.com/wamonroe/gh-team-reviews/internal/github"
 )
 
@@ -25,12 +26,17 @@ type Source interface {
 }
 
 type Options struct {
-	Team     string // "org/slug"; empty tracks direct requests only
-	Required int
+	Team      string // "org/slug"; empty tracks direct requests only
+	Required  int
+	Dismissed dismissed.List
+	// IncludeDismissed keeps dismissed PRs in the results; see
+	// Entry.Dismissed.
+	IncludeDismissed bool
 }
 
 // Build returns the PRs that still need the viewer's review, most recently
-// updated first. All searches run concurrently.
+// updated first, leaving out dismissed PRs unless asked. All searches run
+// concurrently.
 func Build(ctx context.Context, src Source, opts Options) ([]Entry, error) {
 	var viewer string
 	var members []string
@@ -73,8 +79,15 @@ func Build(ctx context.Context, src Source, opts Options) ([]Entry, error) {
 			}
 			seen[pr.URL] = true
 
-			entry := Entry{PR: pr, Viewer: viewer, Team: opts.Team, Members: members, Required: opts.Required}
-			if entry.NeedsReview() {
+			entry := Entry{
+				PR:          pr,
+				Viewer:      viewer,
+				Team:        opts.Team,
+				Members:     members,
+				Required:    opts.Required,
+				DismissedAt: opts.Dismissed.At(pr.Ref()),
+			}
+			if entry.NeedsReview() && (opts.IncludeDismissed || !entry.Dismissed()) {
 				entries = append(entries, entry)
 			}
 		}
@@ -89,7 +102,13 @@ func Build(ctx context.Context, src Source, opts Options) ([]Entry, error) {
 // Queries returns the searches that together find every candidate PR.
 // Candidates are filtered afterwards by Entry.NeedsReview.
 func Queries(team, viewer string, members []string) []string {
-	queries := []string{baseQuery + " user-review-requested:@me"}
+	queries := []string{
+		baseQuery + " user-review-requested:@me",
+		// GitHub clears the viewer's request once they review, even with just
+		// a comment, so this catches PRs that have fallen out of
+		// `user-review-requested`.
+		baseQuery + " -author:@me reviewed-by:@me",
+	}
 	if team == "" {
 		return queries
 	}
