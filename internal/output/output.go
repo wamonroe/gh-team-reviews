@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/tableprinter"
-	"github.com/cli/go-gh/v2/pkg/term"
 
 	"github.com/wamonroe/gh-team-reviews/internal/review"
 )
@@ -50,11 +49,19 @@ func JSON(w io.Writer, entries []review.Entry) error {
 	return enc.Encode(out)
 }
 
+// Terminal is the part of go-gh's term.Term that Table needs.
+type Terminal interface {
+	Out() io.Writer
+	ErrOut() io.Writer
+	IsTerminalOutput() bool
+	Size() (width, height int, err error)
+}
+
 // Table prints entries as a table on a terminal, or as tab-separated values
 // without a header when piped. The REVIEWS and FOR columns only appear when a
 // team is being tracked, and DISMISSED (how long ago, blank if not dismissed)
 // only with showDismissed.
-func Table(t term.Term, entries []review.Entry, team string, showDismissed bool, now time.Time) error {
+func Table(t Terminal, entries []review.Entry, team string, showDismissed bool, now time.Time) error {
 	isTTY := t.IsTerminalOutput()
 	if len(entries) == 0 {
 		if isTTY {

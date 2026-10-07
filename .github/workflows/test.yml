@@ -5,16 +5,63 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
+    # Test against both the go.mod minimum and the latest stable Go, which is
+    # what release binaries are built with.
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [go.mod, stable]
+    name: test (${{ matrix.go }})
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go == 'stable' && 'stable' || '' }}
+          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
+      - run: go mod verify
+      - name: go mod tidy
+        run: go mod tidy -diff
       - run: go vet ./...
-      - run: go test ./...
+      - run: go test -race ./...
+      - name: Smoke test the binary
+        run: |
+          go build -o gh-team-reviews .
+          ./gh-team-reviews --version
+          ./gh-team-reviews --help
+
+  cross-compile:
+    # Every platform cli/gh-extension-precompile releases for. Dependencies
+    # like x/sys and x/term have per-OS code that a Linux build never touches.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Build each release platform
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          for platform in \
+            darwin/amd64 darwin/arm64 \
+            freebsd/386 freebsd/amd64 freebsd/arm64 \
+            linux/386 linux/amd64 linux/arm linux/arm64 \
+            windows/386 windows/amd64 windows/arm64
+          do
+            echo "::group::$platform"
+            GOOS="${platform%/*}" GOARCH="${platform#*/}" go build -trimpath -o /dev/null . || failed="$failed $platform"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Build failed for:$failed"
+            exit 1
+          fi
 
   govulncheck:
     runs-on: ubuntu-latest
@@ -25,3 +72,14 @@ jobs:
       - uses: golang/govulncheck-action@v1
         with:
           go-version-input: stable
+
+  actionlint:
+    # Catches workflow mistakes in Dependabot's GitHub Actions bumps, which
+    # matters most for release.yml since it otherwise only runs on a tag.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
