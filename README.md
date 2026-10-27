@@ -26,6 +26,9 @@ gh extension install wamonroe/gh-team-reviews
 Or, from a clone of this repository:
 
 ```sh
+devbox run install
+
+# Or, if you have Go installed locally
 go build -o gh-team-reviews .
 gh extension install .
 ```
@@ -34,7 +37,10 @@ A local install is a symlink to the clone, so rebuilding updates it in place.
 
 ## Configure
 
-Create `~/.config/gh-team-reviews/config.yml` (or under `$XDG_CONFIG_HOME`):
+Create `~/.config/gh-team-reviews/config.yml`. If you've set
+[`XDG_CONFIG_HOME`](https://specifications.freedesktop.org/basedir-spec/latest/)
+to move your config directory, use `$XDG_CONFIG_HOME/gh-team-reviews/config.yml`
+instead.
 
 ```yaml
 # The team whose review requests you want to track, as org/team-slug.
@@ -112,4 +118,9 @@ devbox run test      # go vet + go test
 devbox run install   # build and install as a local gh extension
 ```
 
-Releases are built by the `release` workflow when a `v*` tag is pushed.
+Releases are built by the `release` workflow when a `v*` tag is pushed. Record
+changes in [CHANGELOG.md](CHANGELOG.md) before tagging.
+
+## License
+
+[MIT](LICENSE)
