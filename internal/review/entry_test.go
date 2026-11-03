@@ -306,3 +306,39 @@ func TestDismissed(t *testing.T) {
 		})
 	}
 }
+
+func TestEntryUsesItsOwnRequiredAndTeam(t *testing.T) {
+	p := pr(t, `{"author":{"login":"dave"},
+		"timelineItems":{"nodes":[{"requestedReviewer":{"combinedSlug":"acme/other"}}]},
+		"latestOpinionatedReviews":{"nodes":[{"state":"APPROVED","author":{"login":"zed"}}]}}`)
+	e := Entry{PR: p, Viewer: "me", Team: "acme/other", Members: []string{"me", "zed", "yan"}, Required: 2}
+
+	if !e.NeedsReview() || e.RequiredApprovals() != 2 || len(e.Approvals()) != 1 {
+		t.Errorf("one of two approvals: NeedsReview=%v required=%d approvals=%v",
+			e.NeedsReview(), e.RequiredApprovals(), e.Approvals())
+	}
+	e.Required = 1
+	if e.NeedsReview() {
+		t.Error("a per-repo required of 1 should be satisfied by one approval")
+	}
+	// The global team's request doesn't count for an entry on another team.
+	e.Required, e.Team = 2, "acme/payments"
+	if e.TeamRequested() {
+		t.Error("TeamRequested() should check the entry's own team")
+	}
+}
+
+func TestDismissedUsesEntrysTeam(t *testing.T) {
+	p := pr(t, `{"author":{"login":"dave"},
+		"timelineItems":{"nodes":[{"__typename":"ReviewRequestedEvent","createdAt":"2026-01-03T00:00:00Z",
+			"requestedReviewer":{"combinedSlug":"acme/other"}}]}}`)
+	e := Entry{PR: p, Viewer: "me", Team: "acme/other", Required: 2,
+		DismissedAt: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)}
+	if e.Dismissed() {
+		t.Error("a newer request from the entry's team should undo the dismissal")
+	}
+	e.Team = "acme/payments"
+	if !e.Dismissed() {
+		t.Error("a request from a different team shouldn't undo the dismissal")
+	}
+}

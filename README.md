@@ -48,9 +48,20 @@ team: acme/payments
 
 # Team approvals needed before a PR drops off your list. Defaults to 2.
 required: 2
+
+# Optional per-repo overrides, keyed by owner/name (case-insensitive). A repo's
+# value replaces the global one.
+repos:
+  acme/giving:
+    required: 1               # this repo only needs one team approval
+  acme/web:
+    team: acme/web-team       # this repo is reviewed by a different team
+  acme/legacy:
+    team: ""                  # don't track a team here; direct requests only
 ```
 
-Flags override the config file:
+A PR is judged by its repo's settings, so each repo can name a different team
+and every distinct team is searched. Flags override the config file:
 
 ```sh
 gh team-reviews --team my-org/my-team   # track a different team
@@ -59,6 +70,9 @@ gh team-reviews --team=""               # ignore the configured team
 gh team-reviews --json                  # machine-readable output
 gh team-reviews --all                   # include PRs you've dismissed
 ```
+
+`--team` and `--required` replace only the global values; `repos:` overrides
+still apply.
 
 Without a team, only PRs where you are directly requested are listed.
 

@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/wamonroe/gh-team-reviews/internal/config"
 	"github.com/wamonroe/gh-team-reviews/internal/dismissed"
 	"github.com/wamonroe/gh-team-reviews/internal/github"
 )
@@ -26,8 +27,8 @@ type Source interface {
 }
 
 type Options struct {
-	Team      string // "org/slug"; empty tracks direct requests only
-	Required  int
+	// Config supplies the global and per-repo team and required settings.
+	Config    config.Config
 	Dismissed dismissed.List
 	// IncludeDismissed keeps dismissed PRs in the results; see
 	// Entry.Dismissed.
@@ -39,24 +40,29 @@ type Options struct {
 // concurrently.
 func Build(ctx context.Context, src Source, opts Options) ([]Entry, error) {
 	var viewer string
-	var members []string
+	teams := opts.Config.Teams()
+	members := make([][]string, len(teams))
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
 		viewer, err = src.Viewer(gctx)
 		return err
 	})
-	if opts.Team != "" {
+	for i, team := range teams {
 		g.Go(func() (err error) {
-			members, err = src.TeamMembers(gctx, opts.Team)
+			members[i], err = src.TeamMembers(gctx, team)
 			return err
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+	membersByTeam := map[string][]string{}
+	for i, team := range teams {
+		membersByTeam[team] = members[i]
+	}
 
-	queries := Queries(opts.Team, viewer, members)
+	queries := Queries(viewer, teams, membersByTeam)
 	results := make([][]github.PullRequest, len(queries))
 
 	g, gctx = errgroup.WithContext(ctx)
@@ -79,12 +85,15 @@ func Build(ctx context.Context, src Source, opts Options) ([]Entry, error) {
 			}
 			seen[pr.URL] = true
 
+			// A PR is judged by its own repo's settings, whichever team's
+			// search happened to find it.
+			team, required := opts.Config.For(pr.Repo())
 			entry := Entry{
 				PR:          pr,
 				Viewer:      viewer,
-				Team:        opts.Team,
-				Members:     members,
-				Required:    opts.Required,
+				Team:        team,
+				Members:     membersByTeam[team],
+				Required:    required,
 				DismissedAt: opts.Dismissed.At(pr.Ref()),
 			}
 			if entry.NeedsReview() && (opts.IncludeDismissed || !entry.Dismissed()) {
@@ -99,9 +108,10 @@ func Build(ctx context.Context, src Source, opts Options) ([]Entry, error) {
 	return entries, nil
 }
 
-// Queries returns the searches that together find every candidate PR.
-// Candidates are filtered afterwards by Entry.NeedsReview.
-func Queries(team, viewer string, members []string) []string {
+// Queries returns the searches that together find every candidate PR:
+// the viewer's own, plus a set for each team. members maps each team to its
+// logins. Candidates are filtered afterwards by Entry.NeedsReview.
+func Queries(viewer string, teams []string, members map[string][]string) []string {
 	queries := []string{
 		baseQuery + " user-review-requested:@me",
 		// GitHub clears the viewer's request once they review, even with just
@@ -109,12 +119,15 @@ func Queries(team, viewer string, members []string) []string {
 		// `user-review-requested`.
 		baseQuery + " -author:@me reviewed-by:@me",
 	}
-	if team == "" {
-		return queries
+	for _, team := range teams {
+		queries = append(queries, teamQueries(team, viewer, members[team])...)
 	}
+	return queries
+}
 
+func teamQueries(team, viewer string, members []string) []string {
 	org, _, _ := strings.Cut(team, "/")
-	queries = append(queries, fmt.Sprintf("%s org:%s team-review-requested:%s", baseQuery, org, team))
+	queries := []string{fmt.Sprintf("%s org:%s team-review-requested:%s", baseQuery, org, team)}
 
 	// Once a teammate reviews, GitHub drops the team request, so these catch
 	// PRs that have fallen out of `team-review-requested`.

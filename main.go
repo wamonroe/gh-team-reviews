@@ -76,6 +76,8 @@ number of team approvals. A PR stays listed until you approve it or request
 changes; comment-only reviews don't remove it.
 
 Without a team (from --team or the config file) only direct requests are listed.
+Repos can override the team and required approvals; --team and --required only
+change the global values.
 
 Dismiss a PR to hide it until you or your team are requested to review again.
 A PR is a URL or OWNER/REPO#NUMBER.
@@ -83,6 +85,13 @@ A PR is a URL or OWNER/REPO#NUMBER.
 Config file: %s
   team: org/team-slug
   required: 2
+  repos:                      # optional per-repo overrides, keyed by owner/name
+    org/repo:
+      required: 1             # fewer approvals for this repo
+    org/other:
+      team: org/other-team    # a different team for this repo
+    org/legacy:
+      team: ""                # direct requests only for this repo
 
 Flags:
 `, configPath)
@@ -126,8 +135,7 @@ Flags:
 		return err
 	}
 	entries, err := review.Build(context.Background(), client, review.Options{
-		Team:             cfg.Team,
-		Required:         cfg.Required,
+		Config:           cfg,
 		Dismissed:        list,
 		IncludeDismissed: *all,
 	})
@@ -138,7 +146,7 @@ Flags:
 	if *asJSON {
 		return output.JSON(os.Stdout, entries)
 	}
-	return output.Table(term.FromEnv(), entries, cfg.Team, *all, time.Now())
+	return output.Table(term.FromEnv(), entries, cfg.Teams(), *all, time.Now())
 }
 
 // runDismiss adds PRs to the dismissed list. Every PR already on the list is
