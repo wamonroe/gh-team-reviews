@@ -6,6 +6,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `repos:` in the config file to override `team` and `required` for individual
+  repos. A repo can use a different team, a different number of required
+  approvals, or `team: ""` to list only direct requests. Every configured team
+  is searched, and each PR is judged by its repo's settings.
+- `team` in `--json` output, the team the PR was judged against.
+
 ## [1.0.0] - 2026-10-27
 
 ### Added

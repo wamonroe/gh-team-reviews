@@ -22,6 +22,7 @@ type jsonEntry struct {
 	Reason      string     `json:"reason"`
 	Approvals   []string   `json:"approvals"`
 	Required    int        `json:"required"`
+	Team        string     `json:"team"`
 	DismissedAt *time.Time `json:"dismissed_at,omitempty"`
 }
 
@@ -38,6 +39,7 @@ func JSON(w io.Writer, entries []review.Entry) error {
 			Reason:    e.Reason(),
 			Approvals: e.Approvals(),
 			Required:  e.RequiredApprovals(),
+			Team:      e.Team,
 		}
 		if e.Dismissed() {
 			out[i].DismissedAt = &e.DismissedAt
@@ -58,10 +60,10 @@ type Terminal interface {
 }
 
 // Table prints entries as a table on a terminal, or as tab-separated values
-// without a header when piped. The REVIEWS and FOR columns only appear when a
-// team is being tracked, and DISMISSED (how long ago, blank if not dismissed)
+// without a header when piped. The REVIEWS and FOR columns only appear when at
+// least one team is being tracked (globally or for a repo), and DISMISSED (how long ago, blank if not dismissed)
 // only with showDismissed.
-func Table(t Terminal, entries []review.Entry, team string, showDismissed bool, now time.Time) error {
+func Table(t Terminal, entries []review.Entry, teams []string, showDismissed bool, now time.Time) error {
 	isTTY := t.IsTerminalOutput()
 	if len(entries) == 0 {
 		if isTTY {
@@ -74,11 +76,11 @@ func Table(t Terminal, entries []review.Entry, team string, showDismissed bool, 
 	if err != nil {
 		width = 80
 	}
-	org, _, _ := strings.Cut(team, "/")
+	org := commonOrg(teams)
 
 	tp := tableprinter.New(t.Out(), isTTY, width)
 	header := []string{"PR"}
-	if team != "" {
+	if len(teams) > 0 {
 		header = append(header, "REVIEWS", "FOR")
 	}
 	header = append(header, "UPDATED")
@@ -95,7 +97,7 @@ func Table(t Terminal, entries []review.Entry, team string, showDismissed bool, 
 		label = fmt.Sprintf("%s#%d", label, e.PR.Number)
 
 		tp.AddField(label, tableprinter.WithTruncate(nil), tableprinter.WithColor(linkTo(e.PR.URL, isTTY)))
-		if team != "" {
+		if len(teams) > 0 {
 			tp.AddField(reviews(e), tableprinter.WithTruncate(nil))
 			tp.AddField(e.Reason(), tableprinter.WithTruncate(nil))
 		}
@@ -112,6 +114,21 @@ func Table(t Terminal, entries []review.Entry, team string, showDismissed bool, 
 		tp.EndRow()
 	}
 	return tp.Render()
+}
+
+// commonOrg is the org shared by every team, which repo names can safely drop
+// to save space. It's empty when there are no teams or they span several orgs,
+// where a bare repo name could be ambiguous.
+func commonOrg(teams []string) string {
+	common := ""
+	for i, team := range teams {
+		org, _, _ := strings.Cut(team, "/")
+		if i > 0 && org != common {
+			return ""
+		}
+		common = org
+	}
+	return common
 }
 
 // reviews renders approvals against what the entry is waiting on, e.g. "1/2"

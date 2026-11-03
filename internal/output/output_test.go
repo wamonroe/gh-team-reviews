@@ -65,7 +65,7 @@ func entries(t *testing.T) []review.Entry {
 
 func TestTableTTY(t *testing.T) {
 	term := &fakeTerminal{tty: true, width: 80}
-	if err := Table(term, entries(t), "acme/payments", true, now); err != nil {
+	if err := Table(term, entries(t), []string{"acme/payments"}, true, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,7 +79,7 @@ func TestTableTTY(t *testing.T) {
 
 func TestTablePiped(t *testing.T) {
 	term := &fakeTerminal{}
-	if err := Table(term, entries(t), "", false, now); err != nil {
+	if err := Table(term, entries(t), nil, false, now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,7 +92,7 @@ func TestTablePiped(t *testing.T) {
 
 func TestTableEmpty(t *testing.T) {
 	tty := &fakeTerminal{tty: true, width: 80}
-	if err := Table(tty, nil, "", false, now); err != nil {
+	if err := Table(tty, nil, nil, false, now); err != nil {
 		t.Fatal(err)
 	}
 	if tty.out.String() != "" || tty.errOut.String() != "No PRs need your review.\n" {
@@ -100,7 +100,7 @@ func TestTableEmpty(t *testing.T) {
 	}
 
 	piped := &fakeTerminal{}
-	if err := Table(piped, nil, "", false, now); err != nil {
+	if err := Table(piped, nil, nil, false, now); err != nil {
 		t.Fatal(err)
 	}
 	if piped.out.String() != "" || piped.errOut.String() != "" {
@@ -124,7 +124,8 @@ func TestJSON(t *testing.T) {
     "updated_at": "2026-10-06T11:15:00Z",
     "reason": "you",
     "approvals": [],
-    "required": 1
+    "required": 1,
+    "team": "acme/payments"
   },
   {
     "url": "https://github.com/other/web/pull/345",
@@ -138,6 +139,7 @@ func TestJSON(t *testing.T) {
       "alice"
     ],
     "required": 2,
+    "team": "acme/payments",
     "dismissed_at": "2026-10-06T07:00:00Z"
   }
 ]
@@ -150,4 +152,21 @@ func TestJSON(t *testing.T) {
 // link is cell text wrapped in an OSC 8 terminal hyperlink.
 func link(url, text string) string {
 	return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+}
+
+func TestCommonOrg(t *testing.T) {
+	tests := []struct {
+		teams []string
+		want  string
+	}{
+		{nil, ""},
+		{[]string{"acme/a"}, "acme"},
+		{[]string{"acme/a", "acme/b"}, "acme"},
+		{[]string{"acme/a", "other/b"}, ""},
+	}
+	for _, tt := range tests {
+		if got := commonOrg(tt.teams); got != tt.want {
+			t.Errorf("commonOrg(%v) = %q, want %q", tt.teams, got, tt.want)
+		}
+	}
 }

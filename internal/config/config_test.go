@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -21,7 +22,7 @@ func TestLoadMissingFileUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != (Config{Required: DefaultRequired}) {
+	if cfg.Team != "" || cfg.Required != DefaultRequired || len(cfg.Repos) != 0 {
 		t.Errorf("Load() = %+v", cfg)
 	}
 }
@@ -31,7 +32,7 @@ func TestLoadEmptyFileUsesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != (Config{Required: DefaultRequired}) {
+	if cfg.Team != "" || cfg.Required != DefaultRequired || len(cfg.Repos) != 0 {
 		t.Errorf("Load() = %+v", cfg)
 	}
 }
@@ -41,7 +42,7 @@ func TestLoadReadsFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != (Config{Team: "acme/payments", Required: 3}) {
+	if cfg.Team != "acme/payments" || cfg.Required != 3 {
 		t.Errorf("Load() = %+v", cfg)
 	}
 }
@@ -91,6 +92,102 @@ func TestValidate(t *testing.T) {
 	for _, c := range invalid {
 		if err := c.Validate(); err == nil {
 			t.Errorf("Validate(%+v) = nil, want error", c)
+		}
+	}
+}
+
+const withRepos = `team: acme/payments
+required: 2
+repos:
+  Acme/Giving:
+    required: 1
+  acme/other:
+    team: acme/other-team
+  acme/legacy:
+    team: ""
+`
+
+func TestLoadReadsRepoOverrides(t *testing.T) {
+	cfg, err := Load(write(t, withRepos))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		repo     string
+		team     string
+		required int
+	}{
+		{"acme/giving", "acme/payments", 1},
+		{"ACME/GIVING", "acme/payments", 1}, // matched case-insensitively
+		{"acme/other", "acme/other-team", 2},
+		{"acme/legacy", "", 2}, // explicit empty team differs from unset
+		{"acme/unlisted", "acme/payments", 2},
+	}
+	for _, tt := range tests {
+		team, required := cfg.For(tt.repo)
+		if team != tt.team || required != tt.required {
+			t.Errorf("For(%q) = %q, %d; want %q, %d", tt.repo, team, required, tt.team, tt.required)
+		}
+	}
+
+	want := []string{"acme/other-team", "acme/payments"}
+	if got := cfg.Teams(); !slices.Equal(got, want) {
+		t.Errorf("Teams() = %v, want %v", got, want)
+	}
+}
+
+func TestTeamsWithoutGlobalTeam(t *testing.T) {
+	cfg, err := Load(write(t, "repos:\n  acme/api:\n    team: acme/web\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Teams(); !slices.Equal(got, []string{"acme/web"}) {
+		t.Errorf("Teams() = %v", got)
+	}
+}
+
+func TestLoadRejectsUnknownRepoFields(t *testing.T) {
+	_, err := Load(write(t, "repos:\n  acme/api:\n    requird: 1\n"))
+	if err == nil || !strings.Contains(err.Error(), "requird") {
+		t.Errorf("Load() error = %v, want unknown field error", err)
+	}
+}
+
+func TestLoadRejectsRepoListedTwice(t *testing.T) {
+	_, err := Load(write(t, "repos:\n  acme/api:\n    required: 1\n  ACME/api:\n    required: 2\n"))
+	if err == nil || !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("Load() error = %v, want duplicate error", err)
+	}
+}
+
+func TestValidateRepoOverrides(t *testing.T) {
+	str := func(s string) *string { return &s }
+	num := func(n int) *int { return &n }
+
+	valid := Config{Team: "acme/payments", Required: 2, Repos: map[string]RepoConfig{
+		"acme/a": {Team: str("")},
+		"acme/b": {Team: str("acme/web"), Required: num(1)},
+	}}
+	if err := valid.Validate(); err != nil {
+		t.Errorf("Validate() = %v", err)
+	}
+
+	invalid := map[string]RepoConfig{
+		"acme":       {},
+		"acme/a/b":   {},
+		"acme/api":   {Team: str("payments")},
+		"acme/api2":  {Required: num(0)},
+		"/api":       {},
+		"acme/api3/": {},
+	}
+	for name, repo := range invalid {
+		cfg := Config{Required: 2, Repos: map[string]RepoConfig{name: repo}}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate(%q: %+v) = nil, want error", name, repo)
 		}
 	}
 }
